@@ -89,7 +89,8 @@ spec:
         "kubernetes.io/os": linux
       containers:
       - name: order-service
-        image: ghcr.io/azure-samples/aks-store-demo/order-service:latest
+        image: ghcr.io/blanquicet/order-service:ig-demo
+        imagePullPolicy: Always
         ports:
         - containerPort: 3000
         env:
@@ -176,7 +177,8 @@ spec:
         "kubernetes.io/os": linux
       containers:
       - name: product-service
-        image: ghcr.io/azure-samples/aks-store-demo/product-service:latest
+        image: ghcr.io/blanquicet/product-service:ig-demo
+        imagePullPolicy: Always
         ports:
         - containerPort: 3002
         env: 
@@ -235,7 +237,8 @@ spec:
         "kubernetes.io/os": linux
       containers:
       - name: store-front
-        image: ghcr.io/azure-samples/aks-store-demo/store-front:latest
+        image: ghcr.io/blanquicet/store-front:ig-demo
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
           name: store-front
