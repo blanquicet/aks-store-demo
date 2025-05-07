@@ -72,6 +72,13 @@ pub fn fetch_products(_settings: &Settings) -> Vec<Product> {
             price: 5.99,
             description: "Ensure your furry friend stays safe during water adventures with the Ahoy Doggy Life Jacket. Designed for dogs, this flotation device offers buoyancy and visibility in style.".to_string(),
             image: "/lifejacket.jpg".to_string()
+        },
+        Product {
+            id: 11,
+            name: "Inspektor Gadget".to_string(),
+            price: 0.0,
+            description: " Inspektor Gadget is a set of tools and framework for data collection and system inspection on Kubernetes clusters and Linux hosts using eBPF.".to_string(),
+            image: "/ig.png".to_string()
         }
     ]
 }
