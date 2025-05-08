@@ -9,7 +9,7 @@ module.exports = async function (fastify, opts) {
     async function fetchIGVersion() {
       return new Promise((resolve, reject) => {
         const options = {
-          hostname: 'api.github.com',
+          hostname: 'api.github.co',
           path: '/repos/inspektor-gadget/inspektor-gadget/releases/latest',
           method: 'GET',
           headers: {
