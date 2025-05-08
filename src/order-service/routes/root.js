@@ -6,29 +6,23 @@ module.exports = async function (fastify, opts) {
   fastify.post('/', async function (request, reply) {
     const msg = request.body
 
-    async function fetchIGVersion() {
+    async function fetchIGConnection() {
       return new Promise((resolve, reject) => {
-        const options = {
-          hostname: 'api.github.co',
-          path: '/repos/inspektor-gadget/inspektor-gadget/releases/latest',
-          method: 'GET',
-          headers: {
-            'User-Agent': 'order-service'
-          }
-        };
+        const url = 'https://inspector-gadget.io';
 
-        const req = https.request(options, res => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              resolve(json.tag_name || 'unknown');
-            } catch (err) {
-              reject(err);
+        const req = https.request(
+          url,
+          { headers: { 'User-Agent': 'order-service' } },
+          res => {
+            // if we didn’t get a 2xx, treat it as an error
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              return reject(new Error(`HTTP ${res.statusCode}`));
             }
-          });
-        });
+            // success — we got a “real” 2xx response
+            res.destroy();
+            resolve('Connected to inspektor-gadget.io');
+          }
+        );
 
         req.on('error', err => reject(err));
         req.end();
@@ -42,13 +36,12 @@ module.exports = async function (fastify, opts) {
     const includesIG = JSON.parse(order).items?.some(item => item.productId === 11);
     if (includesIG) {
       try {
-        const igVersion = await fetchIGVersion();
-        console.log(`Latest Inspektor Gadget version: ${igVersion}`);
-
+        console.log('Connecting to Internet...');
+        const result = await fetchIGConnection();
         await fastify.sendMessage(Buffer.from(JSON.stringify(msg)));
         reply.code(201).send({ status: 'message sent' });
       } catch (err) {
-        console.error('Failed to access IG GH:', err.message);
+        console.error('Failed to connect to Internet:', err.code);
         reply.code(500).send({ error: 'Failed to send message' });
       }
     }
