@@ -1,0 +1,461 @@
+# General
+PREFIX="build-demo"
+LOCATION="westus3"
+
+# Cluster
+RESOURCE_GROUP="$PREFIX-rg"
+CLUSTER_NAME="$PREFIX-cluster"
+
+az group create \
+  --name $RESOURCE_GROUP \
+  --location $LOCATION
+
+# Create cluster
+# Use Azure Network Policy Manager for enforcing k8s network policies (Calico and Cilium are the other two options, but didn't try): https://learn.microsoft.com/en-us/azure/aks/use-network-policies
+# Enable App routing to use the managed NGINX ingress: https://docs.azure.cn/en-us/aks/app-routing?tabs=default%2Cdeploy-app-default
+az aks create \
+  --name $CLUSTER_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --node-count 3 \
+  --network-plugin azure \
+  --network-policy azure \
+  --os-sku=Ubuntu \
+  --enable-app-routing \
+  --generate-ssh-keys
+
+az aks get-credentials --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME
+
+# Create VM to act as custom DNS for the cluster
+VMNAME="$PREFIX-vm6"
+USERNAME="azureuser"
+PUBLIC_IP_NAME="tmp-pip"
+NIC_NAME=${VMNAME}Nic
+
+PROVIDER_ID=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}')
+echo "PROVIDER_ID=$PROVIDER_ID"
+
+NODE_RESOURCE_GROUP=$(echo $PROVIDER_ID | sed -n 's|.*/resourceGroups/\([^/]*\)/providers/.*|\1|p')
+echo "NODE_RESOURCE_GROUP=$NODE_RESOURCE_GROUP"
+
+SUBNET_ID=$(az vmss show \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name "$(echo $PROVIDER_ID | sed -n 's|.*/virtualMachineScaleSets/\([^/]*\)/virtualMachines/.*|\1|p')" \
+  --query "virtualMachineProfile.networkProfile.networkInterfaceConfigurations[0].ipConfigurations[0].subnet.id" \
+  -o tsv)
+echo "SUBNET_ID=$SUBNET_ID"
+
+VNET_NAME=$(echo $SUBNET_ID | sed -n 's|.*/virtualNetworks/\([^/]*\)/subnets/.*|\1|p')
+echo "VNET_NAME=$VNET_NAME"
+
+SUBNET_NAME=$(echo $SUBNET_ID | sed 's|.*/subnets/||')
+echo "SUBNET_NAME=$SUBNET_NAME"
+
+NSG_ID=$(az network vnet subnet show \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --vnet-name    $VNET_NAME \
+  --name         $SUBNET_NAME \
+  --query        networkSecurityGroup.id \
+  -o tsv)
+echo "NSG_ID=$NSG_ID"
+
+NSG_NAME=$(echo $NSG_ID | sed 's|.*/networkSecurityGroups/||')
+echo "NSG_NAME=$NSG_NAME"
+
+# Create a NIC in your VNet/Subnet/NSG without a public IP
+# By default this NIC will have no public-IP resource attached
+# Set Azure DNS server (168.63.129.16) as DNS server
+az network nic create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name $NIC_NAME \
+  --vnet-name $VNET_NAME \
+  --subnet    $SUBNET_NAME \
+  --network-security-group $NSG_NAME \
+  --dns-servers 168.63.129.16
+echo "NIC_NAME=$NIC_NAME"
+
+# Retrieve ipconfig name to then update the public IP
+IPCONFIG_NAME=$(az network nic ip-config list \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --nic-name      $NIC_NAME \
+  --query "[0].name" -o tsv)
+echo "IPCONFIG_NAME=$IPCONFIG_NAME"
+
+# Create VM
+# https://learn.microsoft.com/en-us/azure/virtual-machines/windows/quick-create-cli
+az vm create \
+    --resource-group $NODE_RESOURCE_GROUP \
+    --name $VMNAME \
+    --image Canonical:ubuntu-24_04-lts:server:latest \
+    --nics $NIC_NAME \
+    --admin-username $USERNAME \
+    --generate-ssh-keys
+
+#Add public IP to access VM from Internet
+# 1) Create a temporary Public IP
+az network public-ip create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $PUBLIC_IP_NAME \
+  --sku           Standard \
+  --allocation-method Static
+echo "PUBLIC_IP_NAME=$PUBLIC_IP_NAME"
+
+# 2) Associate it to your NIC’s IP‐configuration
+az network nic ip-config update \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --public-ip-address   $PUBLIC_IP_NAME
+
+# 3) Add rule to the NSG that allows 22 inbound traffic
+az network nsg rule create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --nsg-name    $NSG_NAME \
+  --name        AllowSSH \
+  --priority    102 \
+  --direction   Inbound \
+  --access      Allow \
+  --protocol    Tcp \
+  --source-address-prefixes '*' \
+  --source-port-ranges      '*' \
+  --destination-address-prefixes '*' \
+  --destination-port-ranges 22
+
+# 4) Now the VM has a public address:
+PIP=$(az network public-ip show \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $PUBLIC_IP_NAME \
+  --query         ipAddress -o tsv)
+echo "ssh $USERNAME@$PIP"
+
+#Edit
+# Install dnsmasq
+sudo apt update && sudo apt install -y dnsmasq
+
+# Disable & stop systemd-resolved
+sudo systemctl disable --now systemd-resolved
+
+# Unlink the resolved stub resolv.conf
+sudo rm /etc/resolv.conf
+
+
+# Resolve custom host (FIXME: Add VMNAME)
+127.0.1.1   build-demo-vm6
+
+# Create a new resolv.conf pointing at localhost (dnsmasq)
+sudo tee /etc/dnsmasq.d/01-upstream.conf <<EOF
+# ignore /etc/resolv.conf so only these servers are used
+no-resolv
+# primary upstream DNS servers
+server=168.63.129.16
+EOF
+
+# Resolve  (FIXME: Update server IP)
+sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
+# WORKING SCENARIO:
+# Resolve custom host
+#address=/myexternalserver.com/10.224.0.92
+
+# SIMULATE ISSUE:
+# Send all myexternalserver.com lookups to 127.0.0.1#53535 (nothing is listening there)
+server=/myexternalserver.com/127.0.0.1#53535
+EOF
+
+# Restart dnsmasq so it picks up your configs
+sudo systemctl enable --now dnsmasq
+
+# Validate DNS are being resolved
+dig 127.0.0.1 myexternalserver.com +short
+dig 127.0.0.1 example.com +short
+
+# Update NSG to use the VM as DNS server
+PRIVATE_IP=$(az network nic ip-config show \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --query privateIPAddress -o tsv)
+echo "PRIVATE_IP=$PRIVATE_IP"
+
+az network vnet update \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name        $VNET_NAME \
+  --dns-servers $PRIVATE_IP
+
+# Restart nodes  
+VMSS_NAME=$(az vmss list \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --query "[?starts_with(name, 'aks-')].name | [0]" \
+  -o tsv)
+echo "VMSS_NAME=$VMSS_NAME"
+
+az vmss restart \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name $VMSS_NAME \
+  --instance-ids "*" 
+
+# DEEEMOOOO
+
+
+# Workload
+
+# Deploy application
+# https://learn.microsoft.com/en-us/azure/aks/learn/quick-kubernetes-deploy-cli
+kubectl create ns ig-demo
+kubectl apply -f aks-store-ingress-quickstart.yaml -n ig-demo
+
+# Wait app is ready
+watch kubectl get pod -n ig-demo
+
+# Verify services and ingress status
+kubectl get services -n ig-demo
+kubectl get ingress -n ig-demo
+
+# Demo app: Checking orders always fails
+# Slides: Show architecture
+
+# Check logs of store-front
+kubectl logs -n ig-demo -l app=store-front
+
+# Identify IP owner
+kubectl get pods -A -o wide | grep
+
+# Better approach: Use IG
+kubectl gadget run trace_tcp -n ig-demo -l app=store-front
+kubectl gadget run trace_tcp -n ig-demo -l app=store-front --fields=src,dst,type,error
+
+# Fix: Fix target pod in order-service service: aks-store-ingress-quickstart.yaml
+code aks-store-ingress-quickstart.yaml
+kubectl apply -f aks-store-ingress-quickstart.yaml -n ig-demo
+
+# Wait app is ready
+watch kubectl get pod -n ig-demo
+
+# Demo app: Now orders works. Let's simulate an issue on DNS
+
+# IN DNS SERVER:
+sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
+# SIMULATE ISSUE:
+# Send all myexternalserver.com lookups to 127.0.0.1#53535 (nothing is listening there)
+server=/myexternalserver.com/127.0.0.1#53535
+EOF
+
+# Restart dnsmasq
+sudo systemctl restart dnsmasq
+
+# Check it
+dig 127.0.0.1 microsoft.com +short
+dig 127.0.0.1 myexternalserver.com +short
+
+# BACK TO CLIENT:
+# Check logs of order-service
+kubectl logs -n ig-demo -l app=order-service
+
+kubectl gadget run trace_dns:main -A
+kubectl gadget run trace_dns:main -n ig-demo -l app=order-service --filter qtype==A,name==myexternalserver.com. --fields src,dst,nameserver,name,id,qr,rcode
+kubectl gadget run trace_dns:main -n kube-system -l k8s-app=kube-dns --filter qtype==A,nameserver.addr==10.224.0.91,name==myexternalserver.com. --fields src,dst,name,id,qr,rcode
+
+# Let's check the health of the upstream DNS server
+# kubectl gadget run trace_dns:main -n kube-system -l k8s-app=kube-dns --filter nameserver.addr==10.224.0.91 --fields name,id,qr,qtype,rcode,latency_ns
+# It starts becoming messy in the CLI. Let's use a gadget instance manifest:
+kubectl gadget run -f ig-demo/upstream-dns-health.yaml
+
+# IN ANOTHER TERMINAL:
+# Run some extra queries to check the health of the upstream DNS server
+kubectl run -ti demo -n ig-demo --rm --image=busybox
+nslookup example.com
+exit
+exit
+
+# *** EXTRA ***
+
+# IN DNS SERVER:
+# Fix custom DNS server
+sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
+# WORKING SCENARIO:
+# Resolve custom host
+address=/myexternalserver.com/10.224.0.92
+EOF
+
+# Restart dnsmasq
+sudo systemctl restart dnsmasq
+
+# Check it
+dig 127.0.0.1 myexternalserver.com +short
+dig 127.0.0.1 microsoft.com +short
+
+# BACK TO CLIENT:
+# Demo app: Everything works but too many queries
+kubectl gadget run trace_dns:main -n ig-demo -l app=order-service --filter 'qtype==A,name~^myexternalserver.com.*' --fields src,dst,nameserver,name,id,qr,rcode
+
+# Fix: Use fully qualified name for external URLs: add .
+code src/order-service/routes/root.js
+docker build -t ghcr.io/blanquicet/order-service:ig-demo src/order-service
+docker push ghcr.io/blanquicet/order-service:ig-demo
+
+# Restart order-service app
+kubectl rollout restart deployment order-service -n ig-demo
+
+# Wait app is ready
+watch kubectl get pod -n ig-demo
+
+# Check again the number of requests
+kubectl gadget run trace_dns:main -n ig-demo -l app=order-service --filter 'qtype==A,name~^myexternalserver.com.*' --fields src,dst,nameserver,name,id,qr,rcode
+
+--------------------------
+
+# Clean up:
+PREFIX="build-demo"
+LOCATION="westus3"
+
+RESOURCE_GROUP="$PREFIX-rg"
+NODE_RESOURCE_GROUP="$VMNAME-rg"
+CLUSTER_NAME="$PREFIX-cluster"
+VMNAME="$PREFIX-vm6"
+PUBLIC_IP_NAME="tmp-pip"
+NIC_NAME=${VMNAME}Nic
+
+PROVIDER_ID=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}')
+echo "PROVIDER_ID=$PROVIDER_ID"
+
+NODE_RESOURCE_GROUP=$(echo $PROVIDER_ID | sed -n 's|.*/resourceGroups/\([^/]*\)/providers/.*|\1|p')
+echo "NODE_RESOURCE_GROUP=$NODE_RESOURCE_GROUP"
+
+IPCONFIG_NAME=$(az network nic ip-config list \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --nic-name       $NIC_NAME \
+  --query "[0].name" -o tsv)
+echo "IPCONFIG_NAME=$IPCONFIG_NAME"
+
+###
+# Remove the Public IP from the NIC, and then the Public IP
+az network nic ip-config update \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --remove              publicIpAddress
+az network public-ip delete \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $PUBLIC_IP_NAME
+
+###
+# Delet Disk, VM and then NIC
+az vm delete \
+    --resource-group $NODE_RESOURCE_GROUP \
+    --name $VMNAME \
+    --yes
+az network nic delete \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name $NIC_NAME
+
+###
+# Delete cluster
+az aks delete \
+  --name $CLUSTER_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --yes
+
+az group delete \
+  --name $RESOURCE_GROUP \
+  --yes
+
+
+
+### Server VM ###
+SERVER_VMNAME="$PREFIX-server-vm"
+USERNAME="azureuser"
+SERVER_VM_NIC_NAME=${SERVER_VMNAME}Nic
+SERVER_VM_PUBLIC_IP_NAME="server-tmp-pip"
+
+# Create a NIC in your VNet/Subnet/NSG without a public IP
+# By default this NIC will have no public-IP resource attached
+# Set Azure DNS server (168.63.129.16) as DNS server
+az network nic create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name $SERVER_VM_NIC_NAME \
+  --vnet-name $VNET_NAME \
+  --subnet    $SUBNET_NAME \
+  --network-security-group $NSG_NAME \
+  --dns-servers 168.63.129.16
+echo "SERVER_VM_NIC_NAME=$SERVER_VM_NIC_NAME"
+
+az vm create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name $SERVER_VMNAME \
+  --nics $SERVER_VM_NIC_NAME \
+  --image Canonical:ubuntu-24_04-lts:server:latest \
+  --admin-username $USERNAME \
+  --generate-ssh-keys
+
+# Expose to acces it via SSH
+
+# Retrieve ipconfig name to then update the public IP
+IPCONFIG_NAME=$(az network nic ip-config list \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --nic-name      $SERVER_VM_NIC_NAME \
+  --query "[0].name" -o tsv)
+echo "IPCONFIG_NAME=$IPCONFIG_NAME"
+
+az network public-ip create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $SERVER_VM_PUBLIC_IP_NAME \
+  --sku           Standard \
+  --allocation-method Static
+echo "SERVER_VM_PUBLIC_IP_NAME=$SERVER_VM_PUBLIC_IP_NAME"
+
+# 2) Associate it to your NIC’s IP‐configuration
+az network nic ip-config update \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $SERVER_VM_NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --public-ip-address   $SERVER_VM_PUBLIC_IP_NAME
+
+# 3) Add rule to the NSG that allows 22 inbound traffic
+az network nsg rule create \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --nsg-name    $NSG_NAME \
+  --name        AllowSSH \
+  --priority    102 \
+  --direction   Inbound \
+  --access      Allow \
+  --protocol    Tcp \
+  --source-address-prefixes '*' \
+  --source-port-ranges      '*' \
+  --destination-address-prefixes '*' \
+  --destination-port-ranges 22
+ 
+# 4) Now the VM has a public address:
+PIP=$(az network public-ip show \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $SERVER_VM_PUBLIC_IP_NAME \
+  --query         ipAddress -o tsv)
+echo "ssh $USERNAME@$PIP"
+
+# Create server
+
+# 1) (Optional) install python3 if you don’t have it
+sudo apt update && sudo apt install -y python3
+
+# 2) pick (or create) a directory to serve files from
+mkdir -p ~/www && echo "Hello from $(hostname)" > ~/www/index.html
+cd ~/www
+
+# 3) run a simple HTTP server on port 80 (In background)
+sudo nohup python3 -m http.server 80 >/dev/null 2>&1 &
+
+SERVER_VM_PRIVATE_IP=$(az network nic ip-config show \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $SERVER_VM_NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --query privateIPAddress -o tsv)
+echo "SERVER_VM_PRIVATE_IP=$SERVER_VM_PRIVATE_IP"
+
+# Remove the Public IP from the NIC, and then the Public IP
+az network nic ip-config update \
+  --resource-group      $NODE_RESOURCE_GROUP \
+  --nic-name            $SERVER_VM_NIC_NAME \
+  --name                $IPCONFIG_NAME \
+  --remove              publicIpAddress
+az network public-ip delete \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $SERVER_VM_PUBLIC_IP_NAME
+  
+#################
