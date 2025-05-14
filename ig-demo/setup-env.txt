@@ -1,7 +1,6 @@
-# General 
+# General
 PREFIX="build-demo"
 LOCATION="westus3"
-
 
 # Cluster
 RESOURCE_GROUP="$PREFIX-rg"
@@ -93,7 +92,6 @@ az vm create \
 
 #Add public IP to access VM from Internet
 # 1) Create a temporary Public IP
-PUBLIC_IP_NAME="tmp-pip"
 az network public-ip create \
   --resource-group $NODE_RESOURCE_GROUP \
   --name          $PUBLIC_IP_NAME \
@@ -121,7 +119,7 @@ az network nsg rule create \
   --source-port-ranges      '*' \
   --destination-address-prefixes '*' \
   --destination-port-ranges 22
- 
+
 # 4) Now the VM has a public address:
 PIP=$(az network public-ip show \
   --resource-group $NODE_RESOURCE_GROUP \
@@ -129,27 +127,68 @@ PIP=$(az network public-ip show \
   --query         ipAddress -o tsv)
 echo "ssh $USERNAME@$PIP"
 
-#Edit 
-cat /etc/systemd/resolved.conf
-sudo vi /etc/systemd/resolved.conf
-[Resolve]
-...
-DNSStubListenerExtra=0.0.0.0:53
+#Edit
+# Install dnsmasq
+sudo apt update && sudo apt install -y dnsmasq
 
-# Add HTTP Server IP (TODO: MODIFY IP)
-echo "10.224.0.92 myexternalserver.com" | sudo tee -a /etc/hosts
+# Disable & stop systemd-resolved
+sudo systemctl disable --now systemd-resolved
 
-# Then restart it
-sudo systemctl restart systemd-resolved
+# Unlink the resolved stub resolv.conf
+sudo rm /etc/resolv.conf
 
-# Check status
-resolvectl
 
-# Verify resolver has the proper DNS: nameserver 168.63.129.16
-cat /run/systemd/resolve/resolv.conf
+# Resolve custom host (FIXME: Add VMNAME)
+127.0.1.1   build-demo-vm6
+
+# Create a new resolv.conf pointing at localhost (dnsmasq)
+sudo tee /etc/dnsmasq.d/01-upstream.conf <<EOF
+# ignore /etc/resolv.conf so only these servers are used
+no-resolv
+# primary upstream DNS servers
+server=168.63.129.16
+EOF
+
+# Create scripts to break and fix DNS
+
+vi /usr/local/bin/fix-dns-configuration.sh
+----
+#!/bin/bash
+
+echo "Fixing DNS configuration"
+sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
+# WORKING SCENARIO:
+# Resolve custom host
+address=/myexternalserver.com/10.224.0.92
+EOF
+
+echo "Restarting dnsmasq..."
+sudo systemctl restart dnsmasq
+---
+sudo chmod +x /usr/local/bin/fix-dns-configuration.sh
+
+sudo vi /usr/local/bin/update-dns-configuration.sh
+---
+#!/bin/bash
+
+echo "Applying new DNS configuration"
+sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
+# SIMULATE ISSUE:
+# Send all myexternalserver.com lookups to 127.0.0.1#53535 (nothing is listening there)
+server=/myexternalserver.com/127.0.0.1#53535
+EOF
+
+echo "Restarting dnsmasq..."
+sudo systemctl restart dnsmasq
+---
+sudo chmod +x /usr/local/bin/update-dns-configuration.sh
+
+# Restart dnsmasq so it picks up your configs
+sudo systemctl enable --now dnsmasq
 
 # Validate DNS are being resolved
 dig 127.0.0.1 myexternalserver.com +short
+dig 127.0.0.1 example.com +short
 
 # Update NSG to use the VM as DNS server
 PRIVATE_IP=$(az network nic ip-config show \
@@ -174,84 +213,11 @@ echo "VMSS_NAME=$VMSS_NAME"
 az vmss restart \
   --resource-group $NODE_RESOURCE_GROUP \
   --name $VMSS_NAME \
-  --instance-ids "*" 
+  --instance-ids "*"
 
-# DEEEMOOOO
-
-
-# Workload
-
-# Deploy application
-kubectl create ns ig-demo
-kubectl apply -f aks-store-ingress-quickstart.yaml -n ig-demo
-
-# Wait app is ready
-watch kubectl get pod -n ig-demo
-
-# Verify services and ingress status
-kubectl get services -n ig-demo
-kubectl get ingress -n ig-demo
-
-# Demo app: Checking orders always fails
-# Slides: Show architecture
-
-# Check logs of store-front
-kubectl logs -n ig-demo -l app=store-front
-
-# Identify IP owner
-kubectl get pods -A -o wide | grep
-
-# Better approach: Use IG
-kubectl gadget run trace_tcp -n ig-demo -l app=store-front
-kubectl gadget run trace_tcp -n ig-demo -l app=store-front --fields=src,dst,type,error
-
-# Fix: Fix target pod in order-service service: aks-store-ingress-quickstart.yaml
-code aks-store-ingress-quickstart.yaml
-kubectl apply -f aks-store-ingress-quickstart.yaml -n ig-demo
-
-# Wait app is ready
-watch kubectl get pod -n ig-demo
-
-# Demo app: Now orders works. Buuut, IG product fails checking out
-# Slides
-
-# Check logs of order-service
-kubectl logs -n ig-demo -l app=order-service
-
-kubectl gadget run trace_dns -n ig-demo
-kubectl gadget run trace_dns -n ig-demo -l app=order-service --fields src,dst,name,qr,qtype,rcode
-kubectl gadget run trace_dns -n kube-system -l k8s-app=kube-dns --fields src,dst,name,qr,qtype,rcode
-
-# Fix URL and build app again
-code src/order-service/routes/root.js
-docker build -t ghcr.io/blanquicet/order-service:ig-demo .
-docker push ghcr.io/blanquicet/order-service:ig-demo
-
-# Restart order-service app
-kubectl rollout restart deployment order-service -n ig-demo
-
-# Wait app is ready
-watch kubectl get pod -n ig-demo
-
-# Demo app: Everything works but too many queries
-
-# Fix: Add . 
-code src/order-service/routes/root.js
-docker build -t ghcr.io/blanquicet/order-service:ig-demo .
-docker push ghcr.io/blanquicet/order-service:ig-demo
-
-# Restart order-service app
-kubectl rollout restart deployment order-service -n ig-demo
-
-
-# https://learn.microsoft.com/en-us/azure/aks/learn/quick-kubernetes-deploy-cli
-
-kubectl gadget run trace_tcp:v0.40.0 -n ig-demo --fields=k8s.podname,comm,src,dst,type,error --filter=k8s.podName!=rabbitmq-0
-kubectl gadget run trace_dns -n ig-demo --fields name,rcode,addresses --filter='name!~^rabbitmq.*'
-
---------------------------
-
-# Clean up:
+# Clean up
+PREFIX="build-demo"
+LOCATION="westus3"
 
 RESOURCE_GROUP="$PREFIX-rg"
 NODE_RESOURCE_GROUP="$VMNAME-rg"
