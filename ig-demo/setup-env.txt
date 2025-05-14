@@ -25,6 +25,8 @@ az aks create \
 
 az aks get-credentials --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME
 
+kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a example.com. && sleep 5; done"
+
 # Create VM to act as custom DNS for the cluster
 VMNAME="$PREFIX-vm6"
 USERNAME="azureuser"
@@ -159,7 +161,7 @@ echo "Fixing DNS configuration"
 sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
 # WORKING SCENARIO:
 # Resolve custom host
-address=/myexternalserver.com/10.224.0.92
+address=/myexternalendpoint.com/10.224.0.92
 EOF
 
 echo "Restarting dnsmasq..."
@@ -174,8 +176,8 @@ sudo vi /usr/local/bin/update-dns-configuration.sh
 echo "Applying new DNS configuration"
 sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
 # SIMULATE ISSUE:
-# Send all myexternalserver.com lookups to 127.0.0.1#53535 (nothing is listening there)
-server=/myexternalserver.com/127.0.0.1#53535
+# Send all myexternalendpoint.com lookups to 127.0.0.1#53535 (nothing is listening there)
+server=/myexternalendpoint.com/127.0.0.1#53535
 EOF
 
 echo "Restarting dnsmasq..."
@@ -187,7 +189,7 @@ sudo chmod +x /usr/local/bin/update-dns-configuration.sh
 sudo systemctl enable --now dnsmasq
 
 # Validate DNS are being resolved
-dig 127.0.0.1 myexternalserver.com +short
+dig 127.0.0.1 myexternalendpoint.com +short
 dig 127.0.0.1 example.com +short
 
 # Update NSG to use the VM as DNS server

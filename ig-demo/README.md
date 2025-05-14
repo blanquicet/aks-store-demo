@@ -237,16 +237,6 @@ ssh azureuser@<VM_PUBLIC_IP>
 update-dns-configuration.sh
 ```
 
-Let's check how the DNS server behaves now:
-
-```bash
-# This should work
-dig 127.0.0.1 microsoft.com +short
-
-# This should NOT work
-dig 127.0.0.1 myexternalserver.com +short
-```
-
 ### DNS Troubleshooting
 
 This is the scenario we are going to troubleshoot:
@@ -270,7 +260,7 @@ gadget](https://inspektor-gadget.io/docs/latest/gadgets/trace_dns). It allows us
 to trace the DNS queries and responses across the whole cluster:
 
 ```bash
-kubectl gadget run trace_dns:main -A
+kubectl gadget run trace_dns:main --all-namespaces
 ```
 
 For this particular case, let's use the following flags to analyse the DNS
@@ -369,6 +359,7 @@ kubectl gadget run -f ig-demo/upstream-dns-health.yaml
 The output will confirm that the custom DNS server is reachable but it's not
 replying to the queries related with the `myexternalserver.com` domain.
 
+TODO: MAKE THIS POD RUNNING IN THE BACKGROUND
 In another terminal, try an extra query to check the health of the upstream DNS
 server:
 
@@ -386,7 +377,7 @@ First of all, fix the DNS server configuration to make it work again:
 
 ```bash
 # 1) SSH to the VM
-ssh azureuser@<VM_PUBLIC_IP>
+ssh azureuser@<VM_qPUBLIC_IP>
 
 # 2) Run the following command to fix the issue
 fix-dns-configuration.sh

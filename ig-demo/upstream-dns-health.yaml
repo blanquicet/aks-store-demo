@@ -3,13 +3,13 @@ kind: instance-spec
 image: trace_dns:main
 name: upstream-dns-health
 paramValues:
-  # Monitor coredns namepsace
+  # Monitor coredns' namepsace
   operator.KubeManager.namespace: kube-system
 
-  # Monitor coredns labels
+  # Monitor coredns pods' label
   operator.KubeManager.selectors: k8s-app=kube-dns
 
-  # Monitor resolutions from upstream nameserver (10.224.0.91 in this case)
+  # Monitor traffic involving the upstream nameserver (FIXME: Update IP)
   operator.filter.filter: nameserver.addr==10.224.0.91
 
   # Specify fields of interest (Include also latency)
