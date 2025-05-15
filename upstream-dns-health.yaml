@@ -12,5 +12,5 @@ paramValues:
   # Monitor traffic involving the upstream nameserver (FIXME: Update IP)
   operator.filter.filter: nameserver.addr==10.224.0.91
 
-  # Specify fields of interest (Include also latency)
+  # Specify fields of interest
   operator.cli.fields: src,name,id,qr,qtype,rcode,latency_ns
