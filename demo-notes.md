@@ -23,6 +23,18 @@ kubectl wait --for=condition=Ready pods --all --namespace ig-demo --timeout=120s
 
 ## Demo 1: TCP connection issue
 
+We have our application deployed and running on an AKS cluster:
+
+```bash
+kubectl get nodes
+```
+
+Let's check that everything is running properly:
+
+```bash
+kubectl get pod --namespace ig-demo
+```
+
 Let's try to use the app by accessing the ingress IP we are using to expose the
 app to the Internet:
 
@@ -41,15 +53,11 @@ application:
 
 ### TCP Troubleshooting
 
-Start by checking pods' status:
-
-```bash
-kubectl get pod --namespace ig-demo
-```
-
 Let's fist focus on the front-end service:
 
 ![Entry-point](./img/entrypoint.png)
+
+So, let's check the logs of the `store-front` service:
 
 ```bash
 kubectl logs --namespace ig-demo --selector app=store-front
@@ -69,12 +77,6 @@ Let's start by [installing the Inspektor Gadget CLI for Kubernetes](https://insp
 
 ```bash
 kubectl krew install gadget
-```
-
-Verify the installation:
-
-```bash
-kubectl gadget version
 ```
 
 Then, deploy Inspektor Gadget to the cluster:
@@ -107,6 +109,8 @@ kubectl gadget run trace_tcp \
 ```
 
 Reproduce the issue again.
+
+What we got from that output:
 
 The output shows that the issue is not related to the communication between the
 `store-front` service and the `product-service` service ...
