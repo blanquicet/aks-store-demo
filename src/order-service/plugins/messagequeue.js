@@ -10,8 +10,6 @@ module.exports = fp(async function (fastify, opts) {
     let body = message.toString();
 
     if (process.env.ORDER_QUEUE_USERNAME && process.env.ORDER_QUEUE_PASSWORD) {
-      console.log(`sending message ${body} to ${process.env.ORDER_QUEUE_NAME} on ${process.env.ORDER_QUEUE_HOSTNAME} using local auth credentials`);
-
       const container = rhea.create_container();
       const amqp_message = container.message;
 
@@ -42,8 +40,6 @@ module.exports = fp(async function (fastify, opts) {
       connection.open_sender(process.env.ORDER_QUEUE_NAME);
     } else if (process.env.USE_WORKLOAD_IDENTITY_AUTH === 'true') {
       const fullyQualifiedNamespace = process.env.ORDER_QUEUE_HOSTNAME || process.env.AZURE_SERVICEBUS_FULLYQUALIFIEDNAMESPACE;
-
-      console.log(`sending message ${body} to ${process.env.ORDER_QUEUE_NAME} on ${fullyQualifiedNamespace} using Microsoft Entra ID Workload Identity credentials`);
 
       if (!fullyQualifiedNamespace) {
         console.log('no hostname set for message queue. exiting.');

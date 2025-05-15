@@ -160,7 +160,11 @@ Let's see how this affects the application.
 
 ### Scenario
 
-This is the scenario we are going to troubleshoot:
+We know that:
+
+- Communication between the `store-front` and the `order-service` service is
+  working properly.
+- The `order-service` is failing only for the IG product.
 
 ![order-service-internet](./img/order-service-internet.png)
 
@@ -170,16 +174,17 @@ Now, let's check the logs of the `order-service` service:
 kubectl logs --namespace ig-demo --selector app=order-service
 ```
 
+### DNS Troubleshooting
+
 Let's use the `trace_dns` gadget. It allows us to trace the DNS queries and
-responses across the whole cluster.
+responses across the whole cluster:
 
 ```bash
 # kubectl gadget run trace_dns:main --all-namespaces
 ```
 
-### DNS Troubleshooting
-
-Let's focus on the fist phase of DNS resolution:
+But, we are only interested in resolution of the `myexternalendpoint.com`
+domain name by the `order-service`.
 
 ![app-kube-dns](./img/app-kube-dns.png)
 
@@ -189,7 +194,7 @@ To analyse that communication, let's use the following flags:
 kubectl gadget run trace_dns:main \
     --namespace ig-demo --selector app=order-service \
     --filter name==myexternalendpoint.com. \
-    --fields src,dst,name,id,qr,rcode
+    --fields src,dst,name,qr,rcode
 ```
 
 Only responses with `ServerFailure` response code.
@@ -221,8 +226,8 @@ server:
 #    --fields name,id,qr,qtype,rcode,latency_ns
 ```
 
-However, given that it's a very common configuration, let's use a gadget
-manifest instance instead.
+However, given that it's a very common use case, let's use a gadget instance
+manifest instead.
 
 ```bash
 code upstream-dns-health.yaml
