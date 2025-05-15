@@ -8,7 +8,7 @@ module.exports = async function (fastify, opts) {
 
     async function fetchIGConnection() {
       return new Promise((resolve, reject) => {
-        const url = 'http://myexternalserver.com';
+        const url = 'http://myexternalendpoint.com';
 
         const req = http.request(
           url,

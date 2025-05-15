@@ -234,13 +234,13 @@ However, given that it's a very common configuration, let's use a gadget
 manifest instance instead.
 
 ```bash
-code ig-demo/upstream-dns-health.yaml
+code upstream-dns-health.yaml
 ```
 
 And we can run it with the following command:
 
 ```bash
-kubectl gadget run -f ig-demo/upstream-dns-health.yaml
+kubectl gadget run -f upstream-dns-health.yaml
 ```
 
 The output will confirm that the custom DNS server is reachable but it's not

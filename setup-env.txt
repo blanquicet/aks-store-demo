@@ -25,7 +25,7 @@ az aks create \
 
 az aks get-credentials --resource-group $RESOURCE_GROUP --name $CLUSTER_NAME
 
-kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a example.com. && sleep 5; done"
+kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
 
 # Create VM to act as custom DNS for the cluster
 VMNAME="$PREFIX-vm6"
