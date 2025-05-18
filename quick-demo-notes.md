@@ -1,8 +1,12 @@
-# Demo
+# Notes for the demo
+
+This file contains a subset of the content in the
+[detailed-guide](detailed-guide.md) file. It is meant to be used only as a
+reference for the speaker during the live demo.
 
 ## Deploy application
 
-Clean up any previous deployment:
+Clean up:
 
 ```bash
 kubectl delete ns ig-demo
