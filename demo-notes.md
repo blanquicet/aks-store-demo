@@ -51,14 +51,14 @@ So, let's check the logs of the `store-front` service:
 kubectl logs --namespace ig-demo --selector app=store-front
 ```
 
-Of course, we could probably manually assoiate those IPs with the corresponding
+Of course, we could probably manually associate those IPs with the corresponding
 services and pods, but it's tedious and time-consuming.
 
 So, there is an easier approach: Use [Inspektor Gadget](https://inspektor-gadget.io/).
 
 #### Inspektor Gadget approach
 
-Let's start by [installing the Inspektor Gadget CLI for Kubernetes](https://inspektor-gadget.io/docs/latest/quick-start#kubernetes):
+Let's start by installing the Inspektor Gadget:
 
 ```bash
 kubectl krew install gadget
@@ -70,22 +70,8 @@ Then, deploy Inspektor Gadget to the cluster:
 kubectl gadget deploy
 ```
 
-Verify successful deployment:
-
-```bash
-kubectl gadget version
-```
-
 Now, let's run the `trace_tcp` to trace the TCP connections of the front-end
 service:
-
-```bash
-kubectl gadget run trace_tcp \
-    --namespace ig-demo --selector app=store-front
-```
-
-Given that we are filtering the events by the `store-front` service, we can
-avoid printing the Kubernetes metadata:
 
 ```bash
 kubectl gadget run trace_tcp \
@@ -93,17 +79,11 @@ kubectl gadget run trace_tcp \
     --fields=type,src,dst,error
 ```
 
-Reproduce the issue again FROM A NEW WINDOWS.
+Reproduce the issue again FROM SCRATCH.
 
 What we got from that output:
 
-The output shows that the issue is not related to the communication between the
-`store-front` service and the `product-service` service ...
-
-![product-service](./img/product-service.png)
-
-... but rather to the communication between the `store-front` service and the
-`order-service` service.
+ISSUE: Communication between the `store-front` service and the `order-service` service
 
 Now, let's focus on the communication between the `store-front` and the
 `order-service` service:
@@ -148,23 +128,11 @@ Back to slides.
 
 ## Demo 2: DNS issue
 
-### Simulate an issue on the custom DNS server
-
-In the custom DNS server VM, run the following command to simulate the issue:
-
-```bash
-update-dns-configuration.sh
-```
-
-Let's see how this affects the application.
+Demo checking out the *Inspektor Gadget* product in the store.
 
 ### Scenario
 
-We know that:
-
-- Communication between the `store-front` and the `order-service` service is
-  working properly.
-- The `order-service` is failing only for the IG product.
+What we are debugging now:
 
 ![order-service-internet](./img/order-service-internet.png)
 
@@ -176,14 +144,7 @@ kubectl logs --namespace ig-demo --selector app=order-service
 
 ### DNS Troubleshooting
 
-Let's use the `trace_dns` gadget. It allows us to trace the DNS queries and
-responses across the whole cluster:
-
-```bash
-# kubectl gadget run trace_dns:main --all-namespaces
-```
-
-But, we are only interested in resolution of the `myexternalendpoint.com`
+We are only interested in resolution of the `myexternalendpoint.com`
 domain name by the `order-service`.
 
 ![app-kube-dns](./img/app-kube-dns.png)
@@ -220,23 +181,10 @@ Using Inspektor Gadget, we can also verify the general health of the custom DNS
 server:
 
 ```bash
-# kubectl gadget run trace_dns:main \
-#    --namespace kube-system --selector k8s-app=kube-dns \
-#    --filter nameserver.addr==10.224.0.91 \
-#    --fields name,id,qr,qtype,rcode,latency_ns
-```
-
-However, given that it's a very common use case, let's use a gadget instance
-manifest instead.
-
-```bash
-code upstream-dns-health.yaml
-```
-
-And we can run it with the following command:
-
-```bash
-kubectl gadget run -f upstream-dns-health.yaml
+kubectl gadget run trace_dns:main \
+    --namespace kube-system --selector k8s-app=kube-dns \
+    --filter nameserver.addr==10.224.0.91 \
+    --fields name,id,qr,qtype,rcode,latency_ns
 ```
 
 The output will confirm that the custom DNS server is reachable but it's not
