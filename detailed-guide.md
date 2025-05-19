@@ -4,11 +4,45 @@ This file contains all you need to reproduce the troubleshooting networking
 demos presented during the session. Notice it expects to be run on an
 environment created following the steps in [setup-env.md](setup-env.md).
 
+## Prerequisites
+
+Clean up namespace:
+
+```bash
+kubectl delete ns ig-demo
+```
+
+Ensure application performing successful DNS resolutions is running. It will be
+useful to isolate the DNS issue during the demo:
+
+```bash
+kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
+```
+
+Ensure DNS is broken for the demo:
+
+```bash
+# 1) SSH to the VM
+ssh azureuser@<VM_PUBLIC_IP>
+
+# 2) Run the following command to simulate the issue
+break-dns-configuration.sh
+
+# 3) Check the DNS behaviour
+# This should work
+dig 127.0.0.1 microsoft.com +short
+# This should NOT also work
+dig 127.0.0.1 myexternalendpoint.com +short
+
+```
+
 ## Deploy application
 
 This application is based on example from the [Quickstart: Deploy an Azure
 Kubernetes Service (AKS) cluster using Azure
-CLI](https://learn.microsoft.com/en-us/azure/aks/learn/quick-kubernetes-deploy-cli).
+CLI](https://learn.microsoft.com/en-us/azure/aks/learn/quick-kubernetes-deploy-cli). 
+Notice the repo containing that application was merged in this one, with several
+simplifications.
 
 ```bash
 kubectl create ns ig-demo
@@ -43,7 +77,7 @@ http://<INGRESS_IP>
 Before we start troubleshooting, let's check the architecture of the demo
 application:
 
-![Architecture Diagram](./arch.png)
+![Architecture Diagram](./img/arch.png)
 
 The application is composed by the following components:
 
@@ -69,13 +103,14 @@ kubectl get pod --namespace ig-demo
 
 Let's fist focus on the front-end service:
 
-TODO: Add an image where only ingress and front-end are highlighted
+![Entry-point](./img/entrypoint.png)
 
 ```bash
 kubectl logs --namespace ig-demo --selector app=store-front
 ```
 
-Of course, we can try to identify the IPs' owners...
+Of course, we could probably manually associate those IPs with the corresponding
+services and pods, but it's tedious and time-consuming:
 
 ```bash
 kubectl get pods -A -o wide | grep <IP>
@@ -147,18 +182,15 @@ The output shows that:
 This means that the issue is not related to the communication between the
 `store-front` service and the `product-service` service ...
 
-TODO: Add an image where only ingress and front-end and product-service are
-highlighted
+![order-service](./img/product-service.png)
 
 ... but rather to the communication between the `store-front` service and the
-`order-service` service.
-
-### Fixing issue
+`order-service`.
 
 Now, let's focus on the communication between the `store-front` and the
 `order-service` service:
 
-![order-service](./order-service.png)
+![order-service](./img/order-service.png)
 
 Let's check the logs of the `order-service` service:
 
@@ -174,9 +206,13 @@ configuration:
 code aks-store-ingress-quickstart.yaml
 ```
 
-It's targeting the port `3001`, but the `order-service` pod is exposing
-the port `3000`. Let's fix this by changing the `targetPort` of the
-`order-service` service to `3000`:
+The service's targeting the port (`3001`) doesn't match with the container port (`3000`).
+
+![service-issue](./img/service-issue.png)
+
+### Fixing issue
+
+ Let's fix this by changing the `targetPort` of the `order-service` service to `3000`:
 
 ```yaml
 apiVersion: v1
@@ -209,6 +245,8 @@ Now the app should be working.
 
 ## Demo 2: DNS issue
 
+Demo checking out the *Inspektor Gadget* product in the store.
+
 ### Intro to DNS
 
 TODO: Add a diagram with the DNS behaviour in AKS
@@ -221,36 +259,15 @@ custom DNS server is running `dnsmasq` and is configured to resolve the
 `myexternalendpoint.com` domain to the IP of a VM that is running a simple HTTP
 server.
 
-TODO: Add demo environment diagram (Probably a copy of the external DNS scenario
-with the custom DNS server and the HTTP server)
+TODO: Add demo environment diagram
 
-### Simulate an issue on the custom DNS server
+### Scenario
 
-Let's say that after running an update on the custom DNS server, the
-configuration of `dnsmasq` was changed, and now the `myexternalendpoint.com`
-domain is not resolving correctly. This is a common issue that can happen when
-the DNS server is misconfigured or when the DNS server is not reachable.
+What we are debugging now:
 
-In the DNS server VM, run the following command to simulate the issue:
+![order-service-internet](./img/order-service-internet.png)
 
-```bash
-# 1) SSH to the VM
-ssh azureuser@<VM_PUBLIC_IP>
-
-# 2) Run the following command to simulate the issue
-update-dns-configuration.sh
-```
-
-### DNS Troubleshooting
-
-This is the scenario we are going to troubleshoot:
-
-![order-service-internet](./order-service-internet.png)
-
-TODO: Explain a bit more
-
-Now, let's check the logs of the `order-service` service to see if there are
-any errors related to the DNS resolution:
+Now, let's check the logs of the `order-service` service:
 
 ```bash
 kubectl logs --namespace ig-demo --selector app=order-service
@@ -259,7 +276,14 @@ kubectl logs --namespace ig-demo --selector app=order-service
 The logs show that the `order-service` service is trying to resolve the
 `myexternalendpoint.com` domain, but it is failing with error: `EAI_AGAIN`.
 
-Let's use the [trace_dns
+### DNS Troubleshooting
+
+We are only interested in resolution of the `myexternalendpoint.com`
+domain name by the `order-service`.
+
+![app-kube-dns](./img/app-kube-dns.png)
+
+To analyse that communication, let's use the [trace_dns
 gadget](https://inspektor-gadget.io/docs/latest/gadgets/trace_dns). It allows us
 to trace the DNS queries and responses across the whole cluster:
 
@@ -270,13 +294,11 @@ kubectl gadget run trace_dns:main --all-namespaces
 For this particular case, let's use the following flags to analyse the DNS
 traffic between the `order-service` service and the `kube-dns` service:
 
-TODO: Add diagram for order-service <-> kube-dns
-
 ```bash
 kubectl gadget run trace_dns:main \
     --namespace ig-demo --selector app=order-service \
-    --filter qtype==A,name==myexternalendpoint.com. \
-    --fields src,dst,nameserver,name,id,qr,rcode
+    --filter name==myexternalendpoint.com. \
+    --fields src,dst,name,qr,rcode
 ```
 
 Again, we use the `--namespace` and `--selector` flags to filter the events by
@@ -307,16 +329,18 @@ In its output, we can see the requests coming from the `order-service` pod to th
 `kube-dns` service, but all of them are getting `ServerFailure` as response
 code.
 
-Now, let's focus on the DNS traffic between the `kube-dns` service and the
-custom DNS server:
+Given that it's a external URL, the `kube-dns` will use the upstream DNS
+server to resolve the domain name.
 
-TODO: Add diagram for kube-dns <-> Custom DNS server
+![kube-dns-custom-dns](./img/kube-dns-custom-dns.png)
+
+Now, traffic between the `kube-dns` service and the custom DNS server:
 
 ```bash
 kubectl gadget run trace_dns:main \
     --namespace kube-system --selector k8s-app=kube-dns \
-    --filter qtype==A,nameserver.addr==10.224.0.91,name==myexternalendpoint.com. \
-    --fields src,dst,nameserver,name,id,qr,rcode
+    --filter nameserver.addr==10.224.0.91,name==myexternalendpoint.com. \
+    --fields src,dst,name,id,qr,rcode
 ```
 
 This time are filtering the events by the `kube-dns` service:
@@ -363,21 +387,11 @@ kubectl gadget run -f ig-demo/upstream-dns-health.yaml
 The output will confirm that the custom DNS server is reachable but it's not
 replying to the queries related with the `myexternalendpoint.com` domain.
 
-TODO: MAKE THIS POD RUNNING IN THE BACKGROUND
-In another terminal, try an extra query to check the health of the upstream DNS
-server:
-
-```bash
-kubectl run -ti demo --namespace ig-demo --rm --image=busybox
-```
-
-```bash
-nslookup example.com
-```
+![dns-issue](./img/dns-issue.png)
 
 ## Extra demo: Reducing the number of DNS queries for external URLs
 
-First of all, fix the DNS server configuration to make it work again:
+First of all, ensure custom DNS server configuration is working properly:
 
 ```bash
 # 1) SSH to the VM

@@ -4,13 +4,38 @@ This file contains a subset of the content in the
 [detailed-guide](detailed-guide.md) file. It is meant to be used only as a
 reference for the speaker during the live demo.
 
-## Deploy application
+## Prerequisites
 
-Clean up:
+Clean up namespace:
 
 ```bash
 kubectl delete ns ig-demo
 ```
+
+Ensure application performing successful DNS resolutions is running. It will be
+useful to isolate the DNS issue during the demo:
+
+```bash
+kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
+```
+
+Ensure DNS is broken for the demo:
+
+```bash
+# 1) SSH to the VM
+ssh azureuser@<VM_PUBLIC_IP>
+
+# 2) Run the following command to simulate the issue
+break-dns-configuration.sh
+
+# 3) Check the DNS behaviour
+# This should work
+dig 127.0.0.1 microsoft.com +short
+# This should NOT also work
+dig 127.0.0.1 myexternalendpoint.com +short
+```
+
+## Deploy application
 
 Deploy the demo application:
 
@@ -58,7 +83,7 @@ kubectl logs --namespace ig-demo --selector app=store-front
 Of course, we could probably manually associate those IPs with the corresponding
 services and pods, but it's tedious and time-consuming.
 
-So, there is an easier approach: Use [Inspektor Gadget](https://inspektor-gadget.io/).
+So, there is an easier approach: Use *Inspektor Gadget*.
 
 #### Inspektor Gadget approach
 
@@ -174,7 +199,7 @@ Now, traffic between the `kube-dns` service and the custom DNS server:
 ```bash
 kubectl gadget run trace_dns:main \
     --namespace kube-system --selector k8s-app=kube-dns \
-    --filter nameserver.addr==10.224.0.91,name==myexternalendpoint.com. \
+    --filter nameserver.addr==10.224.0.92,name==myexternalendpoint.com. \
     --fields src,dst,name,id,qr,rcode
 ```
 
@@ -187,7 +212,7 @@ server:
 ```bash
 kubectl gadget run trace_dns:main \
     --namespace kube-system --selector k8s-app=kube-dns \
-    --filter nameserver.addr==10.224.0.91 \
+    --filter nameserver.addr==10.224.0.92 \
     --fields name,id,qr,qtype,rcode,latency_ns
 ```
 
