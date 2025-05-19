@@ -6,26 +6,44 @@ reference for the speaker during the live demo.
 
 ## Prerequisites
 
+```bash
+export PS1='cli $ '
+```
+
+Verify the kubectl context is set to the AKS cluster:
+
+```bash
+kubectl config current-context
+```
+
 Clean up namespace:
 
 ```bash
 kubectl delete ns ig-demo
 ```
 
-Ensure application performing successful DNS resolutions is running. It will be
-useful to isolate the DNS issue during the demo:
-
-```bash
-kubectl run anotherapp --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
-```
-
 Ensure DNS is broken for the demo:
 
 ```bash
-# 1) SSH to the VM
-ssh azureuser@<VM_PUBLIC_IP>
+# Get node resource group
+PROVIDER_ID=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}')
+NODE_RESOURCE_GROUP=$(echo $PROVIDER_ID | sed -n 's|.*/resourceGroups/\([^/]*\)/providers/.*|\1|p')
+
+USERNAME="azureuser"
+PUBLIC_IP_NAME="tmp-pip"
+
+# Get the public IP address of the VM
+PIP=$(az network public-ip show \
+  --resource-group $NODE_RESOURCE_GROUP \
+  --name          $PUBLIC_IP_NAME \
+  --query         ipAddress -o tsv)
+echo "ssh $USERNAME@$PIP"
+
+# SSH to the VM
+ssh -o StrictHostKeyChecking=no $USERNAME@$PIP
 
 # 2) Run the following command to simulate the issue
+export PS1='dns-vm $ '
 break-dns-configuration.sh
 
 # 3) Check the DNS behaviour
@@ -33,6 +51,19 @@ break-dns-configuration.sh
 dig 127.0.0.1 microsoft.com +short
 # This should NOT also work
 dig 127.0.0.1 myexternalendpoint.com +short
+```
+
+Prepare applications (FIXME: Update tags here and in the `aks-store-ingress-quickstart.yaml` file):
+
+```bash
+docker build -t ghcr.io/blanquicet/order-service:ig-demo src/order-service
+docker push ghcr.io/blanquicet/order-service:ig-demo
+
+docker build -t ghcr.io/blanquicet/product-service:ig-demo src/product-service
+docker push ghcr.io/blanquicet/product-service:ig-demo
+
+docker build -t ghcr.io/blanquicet/store-front:ig-demo src/store-front
+docker push ghcr.io/blanquicet/store-front:ig-demo
 ```
 
 ## Deploy application
@@ -44,10 +75,18 @@ kubectl create ns ig-demo
 kubectl apply -f aks-store-ingress-quickstart.yaml --namespace ig-demo
 ```
 
+Ensure application performing successful DNS resolutions is running. It will be
+useful to isolate the DNS issue during the demo:
+
+```bash
+kubectl run anotherapp --namespace ig-demo --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
+```
+
 Wait for the app to be ready:
 
 ```bash
 kubectl wait --for=condition=Ready pods --all --namespace ig-demo --timeout=120s
+kubectl get pods -n ig-demo
 ```
 
 ## Demo 1: TCP connection issue
@@ -57,14 +96,13 @@ app to the Internet:
 
 ```bash
 PIP=$(kubectl get ingress store-front --namespace ig-demo \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-echo "Public IP to access the app: $PIP"
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}') && \
+  echo "Public IP to access the app: $PIP"
 ```
 
 ### App architecture
 
-Before we start troubleshooting, let's check the architecture of the demo
-application:
+Before we start troubleshooting:
 
 ![Architecture Diagram](./img/arch.png)
 
@@ -80,20 +118,21 @@ So, let's check the logs of the `store-front` service:
 kubectl logs --namespace ig-demo --selector app=store-front
 ```
 
-Of course, we could probably manually associate those IPs with the corresponding
-services and pods, but it's tedious and time-consuming.
+Analyse logs: **tedious and time-consuming**.
 
-So, there is an easier approach: Use *Inspektor Gadget*.
+Easier approach: Use *Inspektor Gadget*.
 
 #### Inspektor Gadget approach
 
 Let's start by installing the Inspektor Gadget:
 
+CLI:
+
 ```bash
 kubectl krew install gadget
 ```
 
-Then, deploy Inspektor Gadget to the cluster:
+Deploy Inspektor Gadget to the cluster:
 
 ```bash
 kubectl gadget deploy
@@ -108,14 +147,13 @@ kubectl gadget run trace_tcp \
     --fields=type,src,dst,error
 ```
 
-Reproduce the issue again FROM SCRATCH.
+Reproduce the issue again.
 
 What we got from that output:
 
 ISSUE: Communication between the `store-front` service and the `order-service` service
 
-Now, let's focus on the communication between the `store-front` and the
-`order-service` service:
+New focus: communication between the `store-front` and the `order-service` service:
 
 ![order-service](./img/order-service.png)
 
@@ -125,23 +163,24 @@ Let's check the logs of the `order-service` service:
 kubectl logs --namespace ig-demo --selector app=order-service
 ```
 
-The logs show that the `order-service` pod didn't receive any request
-from the `store-front` service. So, let's check the `order-service` service
-configuration:
+Service is not actually the one handling the request, but the pod:
+
+![service](./img/service.jpg)
+
+Let's check the `order-service` service configuration:
 
 ```bash
 code aks-store-ingress-quickstart.yaml
 ```
 
-The service's targeting the port (`3001`) doesn't match with the container port (`3000`).
+Recap of the issue:
 
 ![service-issue](./img/service-issue.png)
 
 ### Fixing issue
 
-Apply the changes:
-
 ```bash
+code aks-store-ingress-quickstart.yaml
 kubectl apply -f aks-store-ingress-quickstart.yaml --namespace ig-demo
 ```
 
@@ -151,7 +190,7 @@ Wait for the app to be ready:
 kubectl wait --for=condition=Ready pods --all --namespace ig-demo --timeout=120s
 ```
 
-Now the app should be working.
+App working again.
 
 Back to slides.
 
@@ -219,7 +258,7 @@ kubectl gadget run trace_dns:main \
 The output will confirm that the custom DNS server is reachable but it's not
 replying to the queries related with the `myexternalendpoint.com` domain.
 
-![dns-issue](./img/dns-issue.png)
+![dns-issue](./img/dns-issue.jpg)
 
 ## Extra demo: Reducing the number of DNS queries for external URLs
 

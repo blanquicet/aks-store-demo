@@ -8,7 +8,7 @@ used as prefix for the name of all the resources created. Change it if you are
 creating a second (back-up) environment:
 
 ```bash
-PREFIX="ig-build"
+PREFIX="build-demo"
 LOCATION="westus3"
 ```
 
@@ -186,6 +186,9 @@ echo "ssh $USERNAME@$PIP"
 ### Configure VM as endpoint server (HTTP)
 
 ```bash
+# 0) SSH to the VM
+ssh -o StrictHostKeyChecking=no $USERNAME@$PIP
+
 # 1) Install python3 if you don’t have it
 sudo apt update && sudo apt install -y python3
 
@@ -195,6 +198,9 @@ cd ~/www
 
 # 3) Run a simple HTTP server on port 80 (In background)
 sudo nohup python3 -m http.server 80 >/dev/null 2>&1 &
+
+# 4) Check the server is running
+curl -s 127.0.0.1
 ```
 
 Get VM's private IP:
@@ -377,7 +383,8 @@ Use `dsnmasq` to act as a DNS resolver but disable systemd-resolved (otherwise
 they will conflict).
 
 ```bash
-ssh azureuser@<VM_PUBLIC_IP>
+# SSH to the VM
+ssh -o StrictHostKeyChecking=no $USERNAME@$PIP
 
 # Install dnsmasq
 sudo apt update && sudo apt install -y dnsmasq
@@ -421,7 +428,7 @@ hostname. I solved it by doing this:
 sudo vi /etc/hosts
 
 # Resolve custom host (FIXME: Add VMNAME)
-127.0.1.1   ig-build-vm
+127.0.1.1   <VMNAME>
 ```
 
 #### Create scripts to break and fix DNS
@@ -432,7 +439,7 @@ NOTE: Update these scripts to use private IP of VM acting as external endpoint
 Script to break things:
 
 ```bash
-sudo vi /usr/local/bin/break-dns-configuration.sh
+sudo nano /usr/local/bin/break-dns-configuration.sh
 ```
 
 Content:
@@ -440,7 +447,7 @@ Content:
 ```text
 #!/bin/bash
 
-echo "Applying new DNS configuration"
+echo "Breaking DNS configuration"
 sudo tee /etc/dnsmasq.d/10-custom-hosts.conf <<EOF
 # SIMULATE ISSUE:
 # Send all myexternalendpoint.com lookups to 127.0.0.1#53535 (nothing is listening there)
@@ -454,7 +461,7 @@ sudo systemctl restart dnsmasq
 Script to fix things:
 
 ```bash
-sudo vi /usr/local/bin/fix-dns-configuration.sh
+sudo nano /usr/local/bin/fix-dns-configuration.sh
 ```
 
 Content:
@@ -515,6 +522,12 @@ az vmss restart \
   --resource-group $NODE_RESOURCE_GROUP \
   --name $VMSS_NAME \
   --instance-ids "*"
+```
+
+Wait for the nodes to be back up:
+
+```bash
+watch -n 5 "kubectl get nodes"
 ```
 
 ### Remove (DNS) VM's public IP
