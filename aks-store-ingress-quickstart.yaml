@@ -248,3 +248,23 @@ spec:
             name: store-front
             port:
               number: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anotherapp
+  namespace: ig-demo
+spec:
+  containers:
+  - name: busybox
+    image: busybox
+    command: ["/bin/sh", "-c"]
+    args:
+      - "while true; do nslookup -querytype=a microsoft.com. && sleep 3; done"
+    resources:
+      limits:
+        cpu: 100m
+        memory: 64Mi
+      requests:
+        cpu: 50m
+        memory: 32Mi

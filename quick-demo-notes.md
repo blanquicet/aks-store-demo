@@ -71,15 +71,8 @@ docker push ghcr.io/blanquicet/store-front:ig-demo
 Deploy the demo application:
 
 ```bash
-kubectl create ns ig-demo
-kubectl apply -f aks-store-ingress-quickstart.yaml --namespace ig-demo
-```
-
-Ensure application performing successful DNS resolutions is running. It will be
-useful to isolate the DNS issue during the demo:
-
-```bash
-kubectl run anotherapp --namespace ig-demo --image busybox -- /bin/sh -c "while true; do nslookup -querytype=a microsoft.com. && sleep 5; done"
+kubectl create namespace ig-demo
+kubectl apply --filename aks-store-ingress-quickstart.yaml --namespace ig-demo
 ```
 
 Wait for the app to be ready:
