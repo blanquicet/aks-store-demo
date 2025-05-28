@@ -70,9 +70,6 @@ echo "NODE_RESOURCE_GROUP=$NODE_RESOURCE_GROUP"
 We want to create the VM within the same vnet and subnet of the nodes so that
 they can communicate.
 
-TODO: We are creating the VM in the same network security group, but probably
-that's not necessary. Investigate this.
-
 Retrieve subnet, vnet and network security group of the VMSS:
 
 ```bash
@@ -263,9 +260,6 @@ echo "NODE_RESOURCE_GROUP=$NODE_RESOURCE_GROUP"
 
 We want to create the VM within the same vnet and subnet of the nodes so that
 they can communicate.
-
-TODO: We are creating the VM in the same network security group, but probably
-that's not necessary. Investigate this.
 
 Retrieve subnet, vnet and network security group of the VMSS:
 
