@@ -3,6 +3,26 @@
 This file contains a guide to create the environment used to run the
 troubleshooting networking demos presented during the session.
 
+## Table of contents
+
+- [Setup environment](#setup-environment)
+  - [Table of contents](#table-of-contents)
+  - [Create the resource group and cluster](#create-the-resource-group-and-cluster)
+    - [Clean up](#clean-up)
+  - [Create VM to act as external endpoint](#create-vm-to-act-as-external-endpoint)
+    - [Create (External endpoint) VM](#create-external-endpoint-vm)
+    - [Create public IP for (External endpoint) VM](#create-public-ip-for-external-endpoint-vm)
+    - [Configure VM as endpoint server (HTTP)](#configure-vm-as-endpoint-server-http)
+    - [Remove (External endpoint) VM's public IP](#remove-external-endpoint-vms-public-ip)
+  - [Create VM to act as custom DNS for the cluster](#create-vm-to-act-as-custom-dns-for-the-cluster)
+    - [Create (DNS) VM](#create-dns-vm)
+    - [Create public IP for (DNS) VM](#create-public-ip-for-dns-vm)
+    - [Configure VM as DNS server](#configure-vm-as-dns-server)
+      - [Create scripts to break and fix DNS](#create-scripts-to-break-and-fix-dns)
+    - [Configure cluster nodes to use VM as DNS server](#configure-cluster-nodes-to-use-vm-as-dns-server)
+    - [Remove (DNS) VM's public IP](#remove-dns-vms-public-ip)
+  - [Delete a VM](#delete-a-vm)
+
 Start by setting the following environment variables. Notice `PREFIX` will be
 used as prefix for the name of all the resources created. Change it if you are
 creating a second (back-up) environment:
